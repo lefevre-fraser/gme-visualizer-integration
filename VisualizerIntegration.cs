@@ -26,6 +26,7 @@ namespace VisualizerIntegration
         private static string mgaFile = null;
         private static List<string> modelsToReOpen = new List<string>();
         GMEConsole GMEConsole { get; set; }
+        System.Windows.Forms.Control hiddenWindow;
 
         // Event handlers for addons
         #region MgaEventSink members
@@ -69,6 +70,11 @@ namespace VisualizerIntegration
                 addon.Destroy();
                 Marshal.FinalReleaseComObject(addon);
                 addon = null;
+                hiddenWindow.BeginInvoke((System.Action)delegate
+                {
+                    hiddenWindow.Dispose();
+                    hiddenWindow = null;
+                });
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_OPEN_PROJECT_FINISHED)
@@ -82,20 +88,26 @@ namespace VisualizerIntegration
                 // Re-opening a project, re-open the previously open models
                 if (project != null && mgaFile == project.ProjectConnStr)
                 {
-                    foreach (string objectPath in modelsToReOpen)
+                    var modelsToReOpenFcos = modelsToReOpen.Select(path => project.ObjectByPath[path]).Where(fco => fco != null).ToList();
+                    if (modelsToReOpenFcos.Count > 0)
                     {
-                        MgaObject obj = project.ObjectByPath[objectPath];
-                        try
+                        hiddenWindow.BeginInvoke((System.Action)delegate
                         {
-                            GMEConsole.gme.ShowFCO((MgaFCO)obj, false);
-                        }
-                        catch (Exception e)
-                        {
-                            GMEConsole.Error.Write(e.ToString());
-                        }
+                            foreach (MgaObject obj in modelsToReOpenFcos)
+                            {
+                                try
+                                {
+                                    GMEConsole.gme.ShowFCO((MgaFCO)obj, false);
+                                }
+                                catch (Exception e)
+                                {
+                                    GMEConsole.Error.Write(e.ToString());
+                                }
+                            }
+                        });
                     }
-                    modelsToReOpen.Clear();
                 }
+                modelsToReOpen.Clear();
 
                 // update the open mga file name
                 mgaFile = GMEConsole.gme.MgaProject.ProjectConnStr;
@@ -189,6 +201,8 @@ namespace VisualizerIntegration
             {
                 addon.EventMask = (uint)ComponentConfig.eventMask;
             }
+            this.hiddenWindow = new System.Windows.Forms.Control();
+            IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
         }
 
         public void InvokeEx(MgaProject project, MgaFCO currentobj, MgaFCOs selectedobjs, int param)
