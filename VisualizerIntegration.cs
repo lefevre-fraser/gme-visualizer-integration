@@ -4,11 +4,13 @@ using System.Text;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.IO;
+using System.IO.Pipes;
 using GME.CSharp;
 using GME.MGA;
 using GME;
 using GME.MGA.Core;
-using System.Threading;
+using System.Threading.Tasks;
+using System.Diagnostics;
 
 namespace VisualizerIntegration
 {
@@ -23,9 +25,17 @@ namespace VisualizerIntegration
         private bool handleEvents = true;
         private MgaProject project = null;
         private List<string> openModels = new List<string>();
+        private const int BUFFER_SIZE = 256;
+        private static Task task = null;
         private static string mgaFile = null;
         private static List<string> modelsToReOpen = new List<string>();
-        GMEConsole GMEConsole { get; set; }
+        static GMEConsole GMEConsole { get; set; }
+
+        public enum Actions
+        {
+            CLOSE,
+            OPEN,
+        }
 
         // Event handlers for addons
         #region MgaEventSink members
@@ -41,31 +51,35 @@ namespace VisualizerIntegration
                 // update the list of models to be re-opened
                 modelsToReOpen = new List<string>(openModels);
 
+#if(DEBUG)
                 // notify open models on console
                 GMEConsole.Error.Write(String.Format("Models Open: {0}", openModels.Count));
                 foreach(string model in openModels)
                 {
                     GMEConsole.Out.Write(model);
                 }
+#endif
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_CLOSE_PROJECT)
             {
+#if(DEBUG)
                 // notify close project
                 if (GMEConsole != null)
                 {
-                    GMEConsole.Error.WriteLine("A project has been closed");
+                    GMEConsole.Error.WriteLine("Closed project: {0}", project.ProjectConnStr.Split('\\').Last());
                 }
+#endif
 
                 // properly destroy this object
-                if (GMEConsole != null)
-                {
-                    if (GMEConsole.gme != null)
-                    {
-                        Marshal.FinalReleaseComObject(GMEConsole.gme);
-                    }
-                    GMEConsole = null;
-                }
+                //if (GMEConsole != null)
+                //{
+                //    if (GMEConsole.gme != null)
+                //    {
+                //        Marshal.FinalReleaseComObject(GMEConsole.gme);
+                //    }
+                //    GMEConsole = null;
+                //}
                 addon.Destroy();
                 Marshal.FinalReleaseComObject(addon);
                 addon = null;
@@ -73,32 +87,88 @@ namespace VisualizerIntegration
 
             if (@event == globalevent_enum.GLOBALEVENT_OPEN_PROJECT_FINISHED)
             {
+#if(DEBUG)
                 // notify open project
                 if (GMEConsole != null)
                 {
-                    GMEConsole.Out.WriteLine("A project has been opened");
+                    GMEConsole.Out.WriteLine("Opened project: {0}", project.ProjectConnStr.Split('\\').Last());
                 }
+#endif
 
                 // Re-opening a project, re-open the previously open models
                 if (project != null && mgaFile == project.ProjectConnStr)
                 {
-                    foreach (string objectPath in modelsToReOpen)
-                    {
-                        MgaObject obj = project.ObjectByPath[objectPath];
-                        try
-                        {
-                            GMEConsole.gme.ShowFCO((MgaFCO)obj, false);
-                        }
-                        catch (Exception e)
-                        {
-                            GMEConsole.Error.Write(e.ToString());
-                        }
-                    }
+                    //foreach (string objectPath in modelsToReOpen)
+                    //{
+                    //    MgaObject obj = project.ObjectByPath[objectPath];
+                    //    try
+                    //    {
+                    //        GMEConsole.gme.ShowFCO((MgaFCO)obj, false);
+                    //    }
+                    //    catch (Exception e)
+                    //    {
+                    //        GMEConsole.Error.Write(e.ToString());
+                    //    }
+                    //}
                     modelsToReOpen.Clear();
                 }
 
                 // update the open mga file name
                 mgaFile = GMEConsole.gme.MgaProject.ProjectConnStr;
+
+                Action<Object> action = (Object parentID) =>
+                {
+                    string pipeFile = String.Format("\\{0}\\{1}", parentID, mgaFile.Split('\\').Last());
+                    PipeSecurity ps = new PipeSecurity();
+                    ps.AddAccessRule(new PipeAccessRule(@"NT AUTHORITY\Everyone", PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
+                    NamedPipeServerStream namedPipe = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 3, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
+
+                    try
+                    {
+#if(DEBUG)
+                        GMEConsole.Out.Write(pipeFile);
+#endif
+                        //PipeSecurity ps = namedPipe.GetAccessControl();
+                        //ps.AddAccessRule
+                        //namedPipe.SetAccessControl(ps);
+                        namedPipe.WaitForConnection();
+
+                        byte[] buffer = new byte[BUFFER_SIZE];
+                        int nread = namedPipe.Read(buffer, 0, BUFFER_SIZE);
+                        string line = Encoding.UTF8.GetString(buffer, 0, nread);
+                        Actions act = (Actions)Enum.Parse(typeof(Actions), line, true);
+                        if (act != Actions.CLOSE) throw new Exception(String.Format("Expected action: CLOSE, received action: {0}", act));
+
+                        GMEConsole.gme.CloseProject(true);
+                        using (BinaryWriter writer = new BinaryWriter(new MemoryStream()))
+                        {
+                            writer.Write("closed");
+                            namedPipe.Write(((MemoryStream)writer.BaseStream).ToArray(), 0, ((MemoryStream)writer.BaseStream).ToArray().Length);
+                        }
+
+                        nread = namedPipe.Read(buffer, 0, BUFFER_SIZE);
+                        line = Encoding.UTF8.GetString(buffer, 0, nread);
+                        act = (Actions)Enum.Parse(typeof(Actions), line, true);
+                        if (act != Actions.OPEN) throw new Exception(String.Format("Expected action: OPEN, received action: {0}", act));
+                        GMEConsole.gme.OpenProject(mgaFile);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
+                    }
+                    finally
+                    {
+                        namedPipe.Disconnect();
+                        namedPipe.Close();
+                    }
+                };
+
+                if (task != null && task.Status.Equals(TaskStatus.Running))
+                {
+                    task.Dispose();
+                    task = null;
+                }
+                task = Task.Factory.StartNew(action, Process.GetCurrentProcess().Id);
             }
 
             #region Other EventHandlers
@@ -152,12 +222,16 @@ namespace VisualizerIntegration
             if ((eventMask & (uint)objectevent_enum.OBJEVENT_OPENMODEL) != 0)
             {
                 openModels.Add(subject.AbsPath);
+#if(DEBUG)
                 GMEConsole.Error.Write(String.Format("Opened Model: {0}", subject.AbsPath));
+#endif
             }
             if ((eventMask & (uint)objectevent_enum.OBJEVENT_CLOSEMODEL) != 0)
             {
                 openModels.Remove(subject.AbsPath);
+#if(DEBUG)
                 GMEConsole.Error.Write(String.Format("Closed Model: {0}", subject.AbsPath));
+#endif
             }
 
             // TODO: Handle object events (OR eventMask with the members of objectevent_enum)
