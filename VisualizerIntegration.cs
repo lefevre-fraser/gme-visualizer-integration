@@ -33,8 +33,8 @@ namespace VisualizerIntegration
         private static string pipeFile = null;
         private static NamedPipeServerStream namedPipeServer = null;
         private static NamedPipeClientStream namedPipeClient = null;
-        GMEConsole GMEConsole { get; set; }
-        System.Windows.Forms.Control hiddenWindow;
+        static GMEConsole GMEConsole { get; set; }
+        private static System.Windows.Forms.Control hiddenWindow;
 
         public enum Actions
         {
@@ -77,14 +77,14 @@ namespace VisualizerIntegration
 #endif
 
                 // properly destroy this object
-                if (GMEConsole != null)
-                {
-                    if (GMEConsole.gme != null)
-                    {
-                        Marshal.FinalReleaseComObject(GMEConsole.gme);
-                    }
-                    GMEConsole = null;
-                }
+                //if (GMEConsole != null)
+                //{
+                //    if (GMEConsole.gme != null)
+                //    {
+                //        Marshal.FinalReleaseComObject(GMEConsole.gme);
+                //    }
+                //    GMEConsole = null;
+                //}
                 addon.Destroy();
                 Marshal.FinalReleaseComObject(addon);
                 addon = null;
@@ -135,22 +135,24 @@ namespace VisualizerIntegration
                 if (thread != null)
                 {
                     thread.Abort();
-                    namedPipeClient = new NamedPipeClientStream(".", pipeFile, PipeDirection.InOut);
-                    namedPipeClient.Connect();
-                    //namedPipeClient.Write(new byte[BUFFER_SIZE], 0, BUFFER_SIZE);
-                    namedPipeClient.Close();
-                    namedPipeClient = null;
+                    if (namedPipeServer != null && namedPipeServer.IsConnected)
+                    {
+                        namedPipeClient = new NamedPipeClientStream(".", pipeFile, PipeDirection.InOut);
+                        namedPipeClient.Connect();
+                        namedPipeClient.Close();
+                        namedPipeClient = null;
+                    }
                     Thread.Sleep(500);
                 }
                 thread = new Thread(() =>
                 {
-                    pipeFile = String.Format("\\{0}\\{1}", Process.GetCurrentProcess().Id, mgaFile.Split('\\').Last());
-                    PipeSecurity ps = new PipeSecurity();
-                    ps.AddAccessRule(new PipeAccessRule(@"NT AUTHORITY\Everyone", PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
-                    namedPipeServer = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
-
                     try
                     {
+                        pipeFile = String.Format("\\{0}\\{1}", Process.GetCurrentProcess().Id, mgaFile.Split('\\').Last());
+                        PipeSecurity ps = new PipeSecurity();
+                        ps.AddAccessRule(new PipeAccessRule(@"NT AUTHORITY\Everyone", PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
+                        namedPipeServer = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
+
 #if(DEBUG)
                         GMEConsole.Out.Write(pipeFile);
 #endif
@@ -161,7 +163,8 @@ namespace VisualizerIntegration
                         Actions act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.CLOSE) throw new Exception(String.Format("Expected action: CLOSE, received action: {0}", act));
 
-                        GMEConsole.gme.CloseProject(true);
+                        GMEConsole.gme.SaveProject();
+                        GMEConsole.gme.CloseProject(false);
                         using (BinaryWriter writer = new BinaryWriter(new MemoryStream()))
                         {
                             writer.Write("closed");
@@ -172,8 +175,12 @@ namespace VisualizerIntegration
                         line = Encoding.UTF8.GetString(buffer, 0, nread);
                         act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.OPEN) throw new Exception(String.Format("Expected action: OPEN, received action: {0}", act));
-                        
-                        GMEConsole.gme.OpenProject(mgaFile);
+
+                        hiddenWindow.Invoke((Action)delegate
+                        {
+                            GMEConsole = GMEConsole.CreateFromProject(project);
+                            GMEConsole.gme.OpenProject(mgaFile);
+                        });
                     }
                     catch (ThreadAbortException e)
                     {
@@ -190,6 +197,7 @@ namespace VisualizerIntegration
                             namedPipeServer.Disconnect();
                         }
                         namedPipeServer.Close();
+                        namedPipeServer = null;
                     }
                 });
                 thread.Start();
