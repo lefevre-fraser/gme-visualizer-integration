@@ -18,21 +18,24 @@ for pipeFile in namedPipes:
 for handle in fileHandles:
 	try:
 		win32file.WriteFile(handle, "Close")
-	except pywintypes.error:
+	except pywintypes.error as e:
+		print(str(e))
 		handle.Close()
 		fileHandles.remove(handle)
 
 for handle in fileHandles:
 	try:
 		win32file.ReadFile(handle, 256)
-	except pywintypes.error:
+	except pywintypes.error as e:
+		print(str(e))
 		handle.Close()
 		fileHandles.remove(handle)
 
 for handle in fileHandles:
 	try:
 		win32file.WriteFile(handle, "Open")
-	except pywintypes.error:
+	except pywintypes.error as e:
+		print(str(e))
 		handle.Close()
 		fileHandles.remove(handle)
 
