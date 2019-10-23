@@ -1,20 +1,40 @@
 import win32file
 import time
+import pywintypes
 from findNamedPipe import getNamedPipes
 
 fileHandles = []
-for pipeFile in getNamedPipes("tasck_behavior_library.mga"):
+namedPipes = []
+try:
+	namedPipes = getNamedPipes("tasck_behavior_library.mga")
+except pywintypes.error:
+	pass
+
+for pipeFile in namedPipes:
+	print(pipeFile)
 	handle = win32file.CreateFile(pipeFile, win32file.GENERIC_READ | win32file.GENERIC_WRITE, 0, None, win32file.OPEN_EXISTING, 0, None)
 	fileHandles.append(handle)
 
 for handle in fileHandles:
-	win32file.WriteFile(handle, "Close")
+	try:
+		win32file.WriteFile(handle, "Close")
+	except pywintypes.error:
+		handle.Close()
+		fileHandles.remove(handle)
 
 for handle in fileHandles:
-	win32file.ReadFile(handle, 256)
+	try:
+		win32file.ReadFile(handle, 256)
+	except pywintypes.error:
+		handle.Close()
+		fileHandles.remove(handle)
 
 for handle in fileHandles:
-	win32file.WriteFile(handle, "open")
+	try:
+		win32file.WriteFile(handle, "Open")
+	except pywintypes.error:
+		handle.Close()
+		fileHandles.remove(handle)
 
 for handle in fileHandles:
 	handle.Close()

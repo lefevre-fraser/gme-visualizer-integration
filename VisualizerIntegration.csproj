@@ -65,6 +65,9 @@
   <ItemGroup>
     <None Include="AssemblySignature.snk" />
   </ItemGroup>
+  <ItemGroup>
+    <WCFMetadata Include="Service References\" />
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
     <PreBuildEvent>del /Q /F .\*</PreBuildEvent>

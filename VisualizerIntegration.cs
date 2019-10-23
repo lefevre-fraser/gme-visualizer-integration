@@ -11,6 +11,7 @@ using GME;
 using GME.MGA.Core;
 using System.Threading.Tasks;
 using System.Diagnostics;
+using System.Threading;
 
 namespace VisualizerIntegration
 {
@@ -26,10 +27,13 @@ namespace VisualizerIntegration
         private MgaProject project = null;
         private List<string> openModels = new List<string>();
         private const int BUFFER_SIZE = 256;
-        private static Task task = null;
+        private static Thread thread = null;
         private static string mgaFile = null;
         private static List<string> modelsToReOpen = new List<string>();
-        static GMEConsole GMEConsole { get; set; }
+        private static string pipeFile = null;
+        private static NamedPipeServerStream namedPipeServer = null;
+        private static NamedPipeClientStream namedPipeClient = null;
+        GMEConsole GMEConsole { get; set; }
         System.Windows.Forms.Control hiddenWindow;
 
         public enum Actions
@@ -73,22 +77,22 @@ namespace VisualizerIntegration
 #endif
 
                 // properly destroy this object
-                //if (GMEConsole != null)
-                //{
-                //    if (GMEConsole.gme != null)
-                //    {
-                //        Marshal.FinalReleaseComObject(GMEConsole.gme);
-                //    }
-                //    GMEConsole = null;
-                //}
+                if (GMEConsole != null)
+                {
+                    if (GMEConsole.gme != null)
+                    {
+                        Marshal.FinalReleaseComObject(GMEConsole.gme);
+                    }
+                    GMEConsole = null;
+                }
                 addon.Destroy();
                 Marshal.FinalReleaseComObject(addon);
                 addon = null;
-                hiddenWindow.BeginInvoke((System.Action)delegate
-                {
-                    hiddenWindow.Dispose();
-                    hiddenWindow = null;
-                });
+                //hiddenWindow.BeginInvoke((System.Action)delegate
+                //{
+                //    hiddenWindow.Dispose();
+                //    hiddenWindow = null;
+                //});
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_OPEN_PROJECT_FINISHED)
@@ -128,25 +132,31 @@ namespace VisualizerIntegration
                 // update the open mga file name
                 mgaFile = GMEConsole.gme.MgaProject.ProjectConnStr;
 
-                Action<Object> action = (Object parentID) =>
+                if (thread != null)
                 {
-                    string pipeFile = String.Format("\\{0}\\{1}", parentID, mgaFile.Split('\\').Last());
+                    thread.Abort();
+                    namedPipeClient = new NamedPipeClientStream(".", pipeFile, PipeDirection.InOut);
+                    namedPipeClient.Connect();
+                    //namedPipeClient.Write(new byte[BUFFER_SIZE], 0, BUFFER_SIZE);
+                    namedPipeClient.Close();
+                    namedPipeClient = null;
+                    Thread.Sleep(500);
+                }
+                thread = new Thread(() =>
+                {
+                    pipeFile = String.Format("\\{0}\\{1}", Process.GetCurrentProcess().Id, mgaFile.Split('\\').Last());
                     PipeSecurity ps = new PipeSecurity();
                     ps.AddAccessRule(new PipeAccessRule(@"NT AUTHORITY\Everyone", PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
-                    NamedPipeServerStream namedPipe = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 3, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
+                    namedPipeServer = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
 
                     try
                     {
 #if(DEBUG)
                         GMEConsole.Out.Write(pipeFile);
 #endif
-                        //PipeSecurity ps = namedPipe.GetAccessControl();
-                        //ps.AddAccessRule
-                        //namedPipe.SetAccessControl(ps);
-                        namedPipe.WaitForConnection();
-
+                        namedPipeServer.WaitForConnection();
                         byte[] buffer = new byte[BUFFER_SIZE];
-                        int nread = namedPipe.Read(buffer, 0, BUFFER_SIZE);
+                        int nread = namedPipeServer.Read(buffer, 0, BUFFER_SIZE);
                         string line = Encoding.UTF8.GetString(buffer, 0, nread);
                         Actions act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.CLOSE) throw new Exception(String.Format("Expected action: CLOSE, received action: {0}", act));
@@ -155,14 +165,19 @@ namespace VisualizerIntegration
                         using (BinaryWriter writer = new BinaryWriter(new MemoryStream()))
                         {
                             writer.Write("closed");
-                            namedPipe.Write(((MemoryStream)writer.BaseStream).ToArray(), 0, ((MemoryStream)writer.BaseStream).ToArray().Length);
+                            namedPipeServer.Write(((MemoryStream)writer.BaseStream).ToArray(), 0, ((MemoryStream)writer.BaseStream).ToArray().Length);
                         }
 
-                        nread = namedPipe.Read(buffer, 0, BUFFER_SIZE);
+                        nread = namedPipeServer.Read(buffer, 0, BUFFER_SIZE);
                         line = Encoding.UTF8.GetString(buffer, 0, nread);
                         act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.OPEN) throw new Exception(String.Format("Expected action: OPEN, received action: {0}", act));
+                        
                         GMEConsole.gme.OpenProject(mgaFile);
+                    }
+                    catch (ThreadAbortException e)
+                    {
+                        
                     }
                     catch (Exception e)
                     {
@@ -170,17 +185,21 @@ namespace VisualizerIntegration
                     }
                     finally
                     {
-                        namedPipe.Disconnect();
-                        namedPipe.Close();
+                        if (namedPipeServer.IsConnected)
+                        {
+                            namedPipeServer.Disconnect();
+                        }
+                        namedPipeServer.Close();
                     }
-                };
+                });
+                thread.Start();
 
-                if (task != null && task.Status.Equals(TaskStatus.Running))
-                {
-                    task.Dispose();
-                    task = null;
-                }
-                task = Task.Factory.StartNew(action, Process.GetCurrentProcess().Id);
+                //if (task != null && task.Status.Equals(TaskStatus.Running))
+                //{
+                    //thread.Abort();
+                    //task = null;
+                //}
+                //task = Task.Factory.StartNew(action, Process.GetCurrentProcess().Id);
             }
 
             #region Other EventHandlers
@@ -275,7 +294,7 @@ namespace VisualizerIntegration
             {
                 addon.EventMask = (uint)ComponentConfig.eventMask;
             }
-            this.hiddenWindow = new System.Windows.Forms.Control();
+            hiddenWindow = new System.Windows.Forms.Control();
             IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
         }
 
