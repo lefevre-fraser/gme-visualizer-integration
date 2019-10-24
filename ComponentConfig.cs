@@ -9,7 +9,7 @@ namespace GME.CSharp
     abstract class ComponentConfig
     {
         // Set paradigm name. Provide * if you want to register it for all paradigms.
-        public const string paradigmName = "CyPhyML";
+        public const string paradigmName = "*";
 
         // Set the human readable name of the addon. You can use white space characters.
         public const string componentName = "Visualizer Integration";

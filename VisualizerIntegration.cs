@@ -15,17 +15,11 @@ using System.Threading;
 
 namespace VisualizerIntegration
 {
-    //[ComVisible(true)]
-    //public class GMEConsoleReference
-    //{
-    //    public GMEConsole GMEConsole = null;
-    //}
-
     [Guid(ComponentConfig.guid),
     ProgId(ComponentConfig.progID),
     ClassInterface(ClassInterfaceType.AutoDual)]
     [ComVisible(true)]
-    public class VisualizerIntegrationAddon : IMgaComponentEx, IGMEVersionInfo, IMgaEventSink/*, IDisposable*/
+    public class VisualizerIntegrationAddon : IMgaComponentEx, IGMEVersionInfo, IMgaEventSink, IDisposable
     {
         private MgaAddOn addon;
         private bool componentEnabled = true;
@@ -39,14 +33,24 @@ namespace VisualizerIntegration
         private static string pipeFile = null;
         private static NamedPipeServerStream namedPipeServer = null;
         private static NamedPipeClientStream namedPipeClient = null;
-        GMEConsole GMEConsole { get; set; }
-        //private static GMEConsoleReference consoleReference = null;
-        private static System.Windows.Forms.Control hiddenWindow;
+        private static Nullable<bool> abortOK = null;
+        static GMEConsole GMEConsole { get; set; }
+        static System.Windows.Forms.Control hiddenWindow;
 
         public enum Actions
         {
             CLOSE,
             OPEN,
+        }
+
+        private bool getGMEConsole()
+        {
+            if (GMEConsole == null || GMEConsole.gme == null)
+            {
+                GMEConsole = GMEConsole.CreateFromProject(this.project);
+            }
+
+            return (GMEConsole != null && GMEConsole.gme != null);
         }
 
         // Event handlers for addons
@@ -56,14 +60,6 @@ namespace VisualizerIntegration
             if (GMEConsole == null || GMEConsole.gme == null)
             {
                 GMEConsole = GMEConsole.CreateFromProject(this.project);
-                //if (consoleReference.GMEConsole == null)
-                //{
-                //    consoleReference.GMEConsole = GMEConsole;
-                //    if (consoleReference.GMEConsole.gme == null)
-                //    {
-                //        consoleReference.GMEConsole.gme = GMEConsole.gme;
-                //    }
-                //}
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_SAVE_PROJECT)
@@ -73,7 +69,7 @@ namespace VisualizerIntegration
 
 #if(DEBUG)
                 // notify open models on console
-                GMEConsole.Error.Write(String.Format("Models Open: {0}", openModels.Count));
+                GMEConsole.Info.Write(String.Format("Models Open: {0}", openModels.Count));
                 foreach(string model in openModels)
                 {
                     GMEConsole.Out.Write(model);
@@ -87,11 +83,9 @@ namespace VisualizerIntegration
                 // notify close project
                 if (GMEConsole != null)
                 {
-                    GMEConsole.Error.WriteLine("Closed project: {0}", project.ProjectConnStr.Split('\\').Last());
+                    GMEConsole.Info.WriteLine("Closed project: {0}", project.ProjectConnStr.Split('\\').Last());
                 }
 #endif
-
-                // properly destroy this object
                 //if (GMEConsole != null)
                 //{
                 //    if (GMEConsole.gme != null)
@@ -103,23 +97,27 @@ namespace VisualizerIntegration
                 addon.Destroy();
                 Marshal.FinalReleaseComObject(addon);
                 addon = null;
-                //hiddenWindow.BeginInvoke((System.Action)delegate
-                //{
-                //    hiddenWindow.Dispose();
-                //    hiddenWindow = null;
-                //});
+                hiddenWindow.BeginInvoke((System.Action)delegate
+                {
+                    hiddenWindow.Dispose();
+                    hiddenWindow = null;
+                });
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_OPEN_PROJECT_FINISHED)
             {
+                if (hiddenWindow == null)
+                {
+                    hiddenWindow = new System.Windows.Forms.Control();
+                    IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
+                }
 #if(DEBUG)
                 // notify open project
-                if (GMEConsole != null)
+                if (getGMEConsole())
                 {
-                    GMEConsole.Out.WriteLine("Opened project: {0}", project.ProjectConnStr.Split('\\').Last());
+                    GMEConsole.Info.WriteLine("Opened project: {0}", project.ProjectConnStr.Split('\\').Last());
                 }
 #endif
-
                 // Re-opening a project, re-open the previously open models
                 if (project != null && mgaFile == project.ProjectConnStr)
                 {
@@ -136,6 +134,7 @@ namespace VisualizerIntegration
                                 }
                                 catch (Exception e)
                                 {
+                                    //throw e;
                                     GMEConsole.Error.Write(e.ToString());
                                 }
                             }
@@ -149,28 +148,42 @@ namespace VisualizerIntegration
 
                 if (thread != null)
                 {
-                    thread.Abort();
-                    if (namedPipeServer != null && namedPipeServer.IsConnected)
+                    if ((bool)abortOK)
+                    {
+                        thread.Abort();
+                    }
+                    if (namedPipeServer != null)
                     {
                         namedPipeClient = new NamedPipeClientStream(".", pipeFile, PipeDirection.InOut);
                         namedPipeClient.Connect();
                         namedPipeClient.Close();
                         namedPipeClient = null;
                     }
+                    //if (namedPipeServer != null)
+                    //{
+                    //    if (namedPipeServer.IsConnected)
+                    //    {
+                    //        namedPipeServer.Disconnect();
+                    //    }
+                    //    namedPipeServer.Close();
+                    //    namedPipeServer = null;
+                    //}
+
+                    Thread.Sleep(2000);
                     thread.Join();
                 }
                 thread = new Thread(() =>
                 {
                     try
                     {
+                        abortOK = true;
                         pipeFile = String.Format("\\{0}\\{1}", Process.GetCurrentProcess().Id, mgaFile.Split('\\').Last());
                         PipeSecurity ps = new PipeSecurity();
                         ps.AddAccessRule(new PipeAccessRule(@"NT AUTHORITY\Everyone", PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
                         namedPipeServer = new NamedPipeServerStream(pipeFile, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.None, BUFFER_SIZE, BUFFER_SIZE, ps);
 
 #if(DEBUG)
-                        GMEConsole.Out.Write(pipeFile);
-                        //consoleReference.GMEConsole.Out.Write(pipeFile);
+                        GMEConsole.Info.Write(String.Format("Opened Pipe File: {0}", pipeFile));
 #endif
                         namedPipeServer.WaitForConnection();
                         byte[] buffer = new byte[BUFFER_SIZE];
@@ -180,9 +193,7 @@ namespace VisualizerIntegration
                         if (act != Actions.CLOSE) throw new Exception(String.Format("Expected action: CLOSE, received action: {0}", act));
 
                         GMEConsole.gme.SaveProject();
-                        //consoleReference.GMEConsole.gme.SaveProject();
                         GMEConsole.gme.CloseProject(false);
-                        //consoleReference.GMEConsole.gme.CloseProject(false);
                         using (BinaryWriter writer = new BinaryWriter(new MemoryStream()))
                         {
                             writer.Write("closed");
@@ -194,12 +205,12 @@ namespace VisualizerIntegration
                         act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.OPEN) throw new Exception(String.Format("Expected action: OPEN, received action: {0}", act));
 
-                        //hiddenWindow.Invoke((Action)delegate
-                        //{
-                        //    GMEConsole = GMEConsole.CreateFromProject(project);
-                        GMEConsole.gme.OpenProject(mgaFile);
-                        //consoleReference.GMEConsole.gme.OpenProject(mgaFile);
-                        //});
+                        namedPipeServer.Disconnect();
+                        namedPipeServer.Close();
+                        namedPipeServer = null;
+
+                        abortOK = false;
+                        new Thread(() => GMEConsole.gme.OpenProject(mgaFile)).Start();
                     }
                     catch (ThreadAbortException e)
                     {
@@ -208,26 +219,23 @@ namespace VisualizerIntegration
                     catch (Exception e)
                     {
                         Console.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
-                        //consoleReference.GMEConsole.Error.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
+                        GMEConsole.Error.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
                     }
                     finally
                     {
-                        if (namedPipeServer.IsConnected)
+                        if (namedPipeServer != null)
                         {
-                            namedPipeServer.Disconnect();
+                            if (namedPipeServer.IsConnected)
+                            {
+                                namedPipeServer.Disconnect();
+                            }
+                            namedPipeServer.Close();
+                            namedPipeServer = null;
                         }
-                        namedPipeServer.Close();
-                        namedPipeServer = null;
+                        abortOK = true;
                     }
                 });
                 thread.Start();
-
-                //if (task != null && task.Status.Equals(TaskStatus.Running))
-                //{
-                    //thread.Abort();
-                    //task = null;
-                //}
-                //task = Task.Factory.StartNew(action, Process.GetCurrentProcess().Id);
             }
 
             #region Other EventHandlers
@@ -277,27 +285,19 @@ namespace VisualizerIntegration
             if (GMEConsole == null)
             {
                 GMEConsole = GMEConsole.CreateFromProject(subject.Project);
-                //if (consoleReference.GMEConsole == null)
-                //{
-                //    consoleReference.GMEConsole = GMEConsole;
-                //    if (consoleReference.GMEConsole.gme == null)
-                //    {
-                //        consoleReference.GMEConsole.gme = GMEConsole.gme;
-                //    }
-                //}
             }
             if ((eventMask & (uint)objectevent_enum.OBJEVENT_OPENMODEL) != 0)
             {
                 openModels.Add(subject.AbsPath);
 #if(DEBUG)
-                GMEConsole.Error.Write(String.Format("Opened Model: {0}", subject.AbsPath));
+                GMEConsole.Info.Write(String.Format("Opened Model: {0}", subject.AbsPath));
 #endif
             }
             if ((eventMask & (uint)objectevent_enum.OBJEVENT_CLOSEMODEL) != 0)
             {
                 openModels.Remove(subject.AbsPath);
 #if(DEBUG)
-                GMEConsole.Error.Write(String.Format("Closed Model: {0}", subject.AbsPath));
+                GMEConsole.Info.Write(String.Format("Closed Model: {0}", subject.AbsPath));
 #endif
             }
 
@@ -330,12 +330,20 @@ namespace VisualizerIntegration
             {
                 addon.EventMask = (uint)ComponentConfig.eventMask;
             }
-            hiddenWindow = new System.Windows.Forms.Control();
-            IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
-            //if (consoleReference == null)
-            //{
-            //    consoleReference = new GMEConsoleReference();
-            //}
+            if (hiddenWindow == null)
+            {
+                hiddenWindow = new System.Windows.Forms.Control();
+                IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
+            }
+
+            new Thread(() =>
+            {
+                while (!getGMEConsole())
+                {
+                    Thread.Sleep(100);
+                }
+                GMEConsole.Info.Write(String.Format("Loaded Addon: {0}", ComponentProgID));
+            }).Start();
         }
 
         public void InvokeEx(MgaProject project, MgaFCO currentobj, MgaFCOs selectedobjs, int param)
@@ -467,13 +475,13 @@ namespace VisualizerIntegration
 
         #endregion
 
-        //public void Dispose()
-        //{
-        //    if (addon != null)
-        //    {
-        //        addon.Destroy();
-        //        addon = null;
-        //    }
-        //}
+        public void Dispose()
+        {
+            if (addon != null)
+            {
+                addon.Destroy();
+                addon = null;
+            }
+        }
     }
 }
