@@ -15,11 +15,17 @@ using System.Threading;
 
 namespace VisualizerIntegration
 {
+    //[ComVisible(true)]
+    //public class GMEConsoleReference
+    //{
+    //    public GMEConsole GMEConsole = null;
+    //}
+
     [Guid(ComponentConfig.guid),
     ProgId(ComponentConfig.progID),
     ClassInterface(ClassInterfaceType.AutoDual)]
     [ComVisible(true)]
-    public class VisualizerIntegrationAddon : IMgaComponentEx, IGMEVersionInfo, IMgaEventSink, IDisposable
+    public class VisualizerIntegrationAddon : IMgaComponentEx, IGMEVersionInfo, IMgaEventSink/*, IDisposable*/
     {
         private MgaAddOn addon;
         private bool componentEnabled = true;
@@ -33,7 +39,8 @@ namespace VisualizerIntegration
         private static string pipeFile = null;
         private static NamedPipeServerStream namedPipeServer = null;
         private static NamedPipeClientStream namedPipeClient = null;
-        static GMEConsole GMEConsole { get; set; }
+        GMEConsole GMEConsole { get; set; }
+        //private static GMEReferenceMaintainer gmeReference = null;
         private static System.Windows.Forms.Control hiddenWindow;
 
         public enum Actions
@@ -49,6 +56,10 @@ namespace VisualizerIntegration
             if (GMEConsole == null || GMEConsole.gme == null)
             {
                 GMEConsole = GMEConsole.CreateFromProject(this.project);
+                if (gmeReference.gme == null)
+                {
+                    gmeReference.gme = GMEConsole.gme;
+                }
             }
 
             if (@event == globalevent_enum.GLOBALEVENT_SAVE_PROJECT)
@@ -142,7 +153,7 @@ namespace VisualizerIntegration
                         namedPipeClient.Close();
                         namedPipeClient = null;
                     }
-                    Thread.Sleep(500);
+                    thread.Join();
                 }
                 thread = new Thread(() =>
                 {
@@ -176,11 +187,11 @@ namespace VisualizerIntegration
                         act = (Actions)Enum.Parse(typeof(Actions), line, true);
                         if (act != Actions.OPEN) throw new Exception(String.Format("Expected action: OPEN, received action: {0}", act));
 
-                        hiddenWindow.Invoke((Action)delegate
-                        {
-                            GMEConsole = GMEConsole.CreateFromProject(project);
-                            GMEConsole.gme.OpenProject(mgaFile);
-                        });
+                        //hiddenWindow.Invoke((Action)delegate
+                        //{
+                        GMEConsole = GMEConsole.CreateFromProject(project);
+                        //gmeReference.gme.OpenProject(mgaFile);
+                        //});
                     }
                     catch (ThreadAbortException e)
                     {
@@ -189,6 +200,7 @@ namespace VisualizerIntegration
                     catch (Exception e)
                     {
                         Console.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
+                        GMEConsole.Error.WriteLine(String.Format("Inner Exception: {0}\nMessage: {1}\nSource: {2}\nStack Trace: {3}", e.InnerException, e.Message, e.Source, e.StackTrace));
                     }
                     finally
                     {
@@ -257,6 +269,10 @@ namespace VisualizerIntegration
             if (GMEConsole == null)
             {
                 GMEConsole = GMEConsole.CreateFromProject(subject.Project);
+                //if (gmeReference.gme == null)
+                //{
+                //    gmeReference.gme = GMEConsole.gme;
+                //}
             }
             if ((eventMask & (uint)objectevent_enum.OBJEVENT_OPENMODEL) != 0)
             {
@@ -304,6 +320,10 @@ namespace VisualizerIntegration
             }
             hiddenWindow = new System.Windows.Forms.Control();
             IntPtr handle = hiddenWindow.Handle; // If the handle has not yet been created, referencing this property will force the handle to be created.
+            //if (gmeReference == null)
+            //{
+            //    gmeReference = new GMEReferenceMaintainer();
+            //}
         }
 
         public void InvokeEx(MgaProject project, MgaFCO currentobj, MgaFCOs selectedobjs, int param)
@@ -435,13 +455,13 @@ namespace VisualizerIntegration
 
         #endregion
 
-        public void Dispose()
-        {
-            if (addon != null)
-            {
-                addon.Destroy();
-                addon = null;
-            }
-        }
+        //public void Dispose()
+        //{
+        //    if (addon != null)
+        //    {
+        //        addon.Destroy();
+        //        addon = null;
+        //    }
+        //}
     }
 }
